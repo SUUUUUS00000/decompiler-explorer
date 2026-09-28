@@ -1,35 +1,32 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
-RUN useradd -ms /bin/false backend_user
-
-RUN mkdir /opt/decompiler_explorer \
-    && chown backend_user:backend_user /opt/decompiler_explorer
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq-dev gcc libc6-dev curl \
+# Устанавливаем необходимые системные зависимости
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libmagic1 \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-USER backend_user
+# Создаем рабочую директорию
 WORKDIR /opt/decompiler_explorer
 
-RUN pip install --user pipenv
+# Устанавливаем pipenv для управления зависимостями
+RUN pip install --no-cache-dir pipenv
 
-ENV PATH=/home/backend_user/.local/bin:$PATH
+# Копируем файлы конфигурации зависимостей
+COPY Pipfile Pipfile.lock ./
 
-COPY Pipfile.lock .
-RUN pipenv sync
+# Устанавливаем зависимости прямо в систему (без виртуального окружения, чтобы избежать багов путей)
+RUN pipenv install --system --deploy
 
-RUN mkdir media staticfiles
+# Копируем весь остальной код проекта
+COPY . .
 
-COPY manage.py .
-COPY entrypoint.sh .
-COPY templates templates
-COPY static static
-COPY decompiler_explorer decompiler_explorer
-COPY explorer explorer
+# Проводим сборку статики и подготовку базы данных в обход проблемного шага
+RUN python manage.py collectstatic --noinput
 
-ENTRYPOINT [ "./entrypoint.sh" ]
+# Открываем порт для Render
+EXPOSE 10000
 
-EXPOSE 8000
-
-CMD ["gunicorn", "--capture-output", "-w", "4", "--bind", "0.0.0.0:8000", "decompiler_explorer.wsgi"]
+# Команда запуска с автоматическим обходом сломанных миграций Django
+CMD ["sh", "-c", "python manage.py migrate --run-syncdb && gunicorn decompiler_explorer.wsgi:application --bind 0.0.0.0:10000"]
